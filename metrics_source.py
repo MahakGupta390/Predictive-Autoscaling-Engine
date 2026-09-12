@@ -10,6 +10,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, asdict, field
 from datetime import datetime, timedelta
 from typing import Iterator, Optional, Tuple
+import time
 
 import numpy as np
 import pandas as pd
@@ -54,7 +55,8 @@ class SyntheticConfig:
     # burst state machine
     burst_probability: float = 0.01          # per-tick chance a new burst starts
     burst_magnitude_range: Tuple[float, float] = (2.0, 4.0)   # multiplier on baseline
-    burst_duration_ticks_range: Tuple[int, int] = (10, 40)
+    burst_duration_ticks_range: Tuple[int, int] = (10, 40)    # hold time at peak
+    burst_ramp_ticks_range: Tuple[int, int] = (5, 15)         # ramp up/down time
 
     # how request_rate drives cpu/mem
     cpu_per_request: float = 0.8
@@ -79,8 +81,7 @@ class SyntheticMetricSource(MetricSource):
         start = datetime.now()
 
         samples = []
-        burst_remaining = 0
-        burst_level = 0.0
+        burst_profile: list = []   # precomputed per-tick contribution for an active burst
 
         for i in range(n_ticks):
             t = start + timedelta(seconds=i * cfg.interval_seconds)
@@ -91,18 +92,21 @@ class SyntheticMetricSource(MetricSource):
             )
             noise = self._rng.normal(0, cfg.noise_std)
 
-            # burst state machine: start a new burst, or continue an existing one
-            if burst_remaining <= 0 and self._rng.random() < cfg.burst_probability:
-                burst_remaining = int(self._rng.integers(*cfg.burst_duration_ticks_range))
-                burst_level = cfg.baseline_request_rate * self._rng.uniform(
-                    *cfg.burst_magnitude_range
-                )
+            # burst state machine: ramp up to peak, hold, ramp back down —
+            # NOT an instant jump. A step-function burst has zero lead-time
+            # signal (it's memoryless), so no model could ever beat naive
+            # persistence at predicting it; a ramp gives a real precursor
+            # to learn from, same as an actual traffic surge building up.
+            if not burst_profile and self._rng.random() < cfg.burst_probability:
+                hold_ticks = int(self._rng.integers(*cfg.burst_duration_ticks_range))
+                ramp_ticks = int(self._rng.integers(*cfg.burst_ramp_ticks_range))
+                peak = cfg.baseline_request_rate * self._rng.uniform(*cfg.burst_magnitude_range)
+                ramp_up = np.linspace(0, peak, ramp_ticks, endpoint=False)
+                hold = np.full(hold_ticks, peak)
+                ramp_down = np.linspace(peak, 0, ramp_ticks, endpoint=False)
+                burst_profile = list(ramp_up) + list(hold) + list(ramp_down)
 
-            if burst_remaining > 0:
-                burst_contrib = burst_level
-                burst_remaining -= 1
-            else:
-                burst_contrib = 0.0
+            burst_contrib = burst_profile.pop(0) if burst_profile else 0.0
 
             request_rate = max(
                 0.0, cfg.baseline_request_rate + diurnal + noise + burst_contrib
@@ -138,3 +142,63 @@ class SyntheticMetricSource(MetricSource):
 
     def save_csv(self, path: str) -> None:
         self.generate_dataset().to_csv(path, index=False)
+
+
+class ClockBasedDemoSource(MetricSource):
+    """Demo-only source: request_rate tracks the REAL current wall-clock
+    time (a daily sine wave anchored to actual hour-of-day, plus a weekend
+    discount and noise) rather than an internal tick counter. Useful for a
+    live demo with no cluster available -- numbers move with whatever time
+    you happen to be presenting at.
+
+    Still synthetic. This is NOT stage 12's real live source (that one
+    reads actual Prometheus/Metrics Server data) -- don't conflate the two
+    in a writeup.
+    """
+
+    def __init__(
+        self,
+        pod_name: str = "app-pod-1",
+        poll_interval_seconds: int = 15,
+        config: Optional[SyntheticConfig] = None,
+        seed: Optional[int] = None,
+    ):
+        self.pod_name = pod_name
+        self.poll_interval_seconds = poll_interval_seconds
+        self.cfg = config or SyntheticConfig()
+        # intentionally non-deterministic by default (seed=None) -- this
+        # is for demo variety, not reproducible testing like the seeded
+        # SyntheticMetricSource
+        self._rng = np.random.default_rng(seed)
+
+    def get_current_sample(self, now: Optional[datetime] = None) -> MetricSample:
+        """now is injectable so this is still unit-testable without
+        depending on the real clock."""
+        now = now or datetime.now()
+        cfg = self.cfg
+
+        day_fraction = (now.hour * 3600 + now.minute * 60 + now.second) / 86400.0
+        # trough near midnight, peak near midday
+        diurnal = cfg.diurnal_amplitude * -np.cos(2 * np.pi * day_fraction)
+
+        request_rate = cfg.baseline_request_rate + diurnal
+        if now.weekday() >= 5:   # Saturday=5, Sunday=6
+            request_rate *= 0.7
+
+        request_rate = max(0.0, request_rate + self._rng.normal(0, cfg.noise_std))
+
+        cpu_pct = float(np.clip(
+            cfg.cpu_per_request * request_rate + self._rng.normal(0, cfg.resource_noise_std),
+            0.0, 100.0,
+        ))
+        mem_pct = float(np.clip(
+            cfg.mem_per_request * request_rate + self._rng.normal(0, cfg.resource_noise_std),
+            0.0, 100.0,
+        ))
+
+        return MetricSample(now, self.pod_name, cpu_pct, mem_pct, request_rate)
+
+    def stream(self) -> Iterator[MetricSample]:
+        while True:
+            yield self.get_current_sample()
+            time.sleep(self.poll_interval_seconds)

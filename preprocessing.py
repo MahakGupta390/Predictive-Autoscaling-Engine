@@ -29,6 +29,9 @@ class FeatureVector:
     rr_ewma: float              # exponentially weighted moving average
     rr_lag_1: float             # request_rate 1 tick ago
     rr_lag_5: float             # request_rate 5 ticks ago
+    hour_sin: float             # cyclic encoding of hour-of-day (avoids 23->0 discontinuity)
+    hour_cos: float
+    is_weekend: int             # 1 for Sat/Sun, else 0
 
 
 @dataclass
@@ -108,6 +111,16 @@ def process_batch(raw_df: pd.DataFrame, cfg: PreprocessConfig = PreprocessConfig
         # cold start: no data `lag` steps back yet -> fall back to current value
         df[f"rr_lag_{lag}"] = df["request_rate"].shift(lag).fillna(df["request_rate"])
 
+    # calendar features, derived purely from the timestamp -- this is why
+    # they live here (stage 2) and not on MetricSample itself: any source
+    # (synthetic or real Prometheus) already carries a timestamp, so this
+    # computation is shared rather than duplicated per-source
+    ts = pd.to_datetime(df["timestamp"])
+    hour_fraction = (ts.dt.hour + ts.dt.minute / 60.0) / 24.0
+    df["hour_sin"] = np.sin(2 * np.pi * hour_fraction)
+    df["hour_cos"] = np.cos(2 * np.pi * hour_fraction)
+    df["is_weekend"] = ts.dt.dayofweek.isin([5, 6]).astype(int)
+
     return df
 
 
@@ -136,4 +149,7 @@ class Preprocessor:
             rr_ewma=float(last["rr_ewma"]),
             rr_lag_1=float(last[f"rr_lag_1"]),
             rr_lag_5=float(last[f"rr_lag_5"]),
+            hour_sin=float(last["hour_sin"]),
+            hour_cos=float(last["hour_cos"]),
+            is_weekend=int(last["is_weekend"]),
         )

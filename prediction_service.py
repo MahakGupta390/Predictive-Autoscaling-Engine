@@ -23,6 +23,14 @@ FEATURE_COLUMNS = [
     "rr_ewma",
     "rr_lag_1",
     "rr_lag_5",
+    # NOTE: hour_sin/hour_cos/is_weekend are computed in preprocessing.py
+    # (correct there, and needed once stage 12's REAL live data is in play)
+    # but deliberately excluded here: this synthetic generator's diurnal
+    # cycle repeats every diurnal_period_minutes (60 min by default), which
+    # has nothing to do with the real wall-clock hour these features
+    # encode. Measured correlation with request_rate was ~-0.07/-0.10 --
+    # noise -- and including them measurably hurt Ridge's fit. Add them
+    # back in once training against real calendar-anchored data.
 ]
 TARGET_COLUMN = "request_rate"
 
