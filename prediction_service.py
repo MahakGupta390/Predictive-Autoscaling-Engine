@@ -6,8 +6,10 @@ train/test/compare harness used to justify picking one over the other.
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Tuple
 
+import joblib
 import numpy as np
 import pandas as pd
 from sklearn.linear_model import Ridge
@@ -175,6 +177,35 @@ class PredictionService:
         X = recent_features_df[FEATURE_COLUMNS]
         preds = self._predictor.predict(X)
         return PredictionResult(predicted_load=preds, model_used=self.model_name)
+
+    def save(self, path: str) -> None:
+        """Persist the trained predictor + metadata needed to reconstruct
+        this service. Raises if called before train() -- persisting an
+        untrained service would silently produce a load() that looks fine
+        but predicts garbage."""
+        if not self._is_trained:
+            raise RuntimeError("cannot save an untrained PredictionService -- call train() first")
+        payload = {
+            "model_name": self.model_name,
+            "horizon": self.horizon,
+            "predictor": self._predictor,
+        }
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        joblib.dump(payload, path)
+
+    @classmethod
+    def load(cls, path: str) -> "PredictionService":
+        payload = joblib.load(path)
+        svc = cls(model_name=payload["model_name"], horizon=payload["horizon"])
+        svc._predictor = payload["predictor"]
+        svc._is_trained = True
+        return svc
+
+
+def default_model_path(model_dir: str, model_name: str) -> str:
+    """One file per model name, so linear_regression and xgboost don't
+    collide on disk when both are trained and saved."""
+    return str(Path(model_dir) / f"{model_name}.joblib")
 
 
 def compare_models(
