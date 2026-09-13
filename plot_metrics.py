@@ -19,6 +19,7 @@ plt.xlabel("Time (minutes)")
 plt.ylabel("Request rate")
 plt.title("Synthetic Request Rate")
 plt.grid(True)
+plt.savefig("plot_metrics_request_rate.png", dpi=130)
 plt.show()
 
 # Plot CPU and memory
@@ -30,4 +31,5 @@ plt.ylabel("Utilization (%)")
 plt.title("CPU and Memory vs Time")
 plt.legend()
 plt.grid(True)
+plt.savefig("plot_metrics_cpu_mem.png", dpi=130)
 plt.show()

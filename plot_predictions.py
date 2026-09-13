@@ -110,4 +110,5 @@ plt.legend()
 plt.grid(alpha=0.3)
 
 plt.tight_layout()
+plt.savefig("plot_predictions_comparison.png", dpi=130)
 plt.show()
