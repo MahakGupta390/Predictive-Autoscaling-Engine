@@ -92,31 +92,103 @@ def replay_decisions(core_df, initial_replicas, hpa_cfg, sla_cfg, capacity_cfg, 
 
 def sidebar_controls():
     with st.sidebar:
-        st.header("Data / Model")
-        duration_minutes = st.slider("Duration (minutes)", 60, 600, 300, step=30)
-        seed = st.number_input("Random seed", value=11, step=1)
-        burst_probability = st.slider("Burst probability (per tick)", 0.0, 0.05, 0.015, step=0.005)
-        model_name = st.radio("Prediction model", ["xgboost", "linear_regression"])
-        warmup_ticks = st.slider("Warmup ticks before first training", 20, 120, 60, step=10)
-        load_clicked = st.button("Train / Retrain Model", type="primary")
+        st.header("Simulation Controls", icon=":material/tune:")
 
-        st.header("SLA & Capacity  (instant)")
-        target_latency_ms = st.slider("Target Latency (ms)", 50, 500, 150, step=10)
-        cpu_threshold_pct = st.slider(
-            "Max CPU Utilization (%)", 50, 100, 80,
-            help="Diagnostic only -- flags SLA violations, does not itself change the replica count. "
-                 "Target Latency above is the real scaling driver.",
+        st.subheader("Data & Model")
+
+        duration_minutes = st.slider(
+            "Duration (minutes)",
+            60, 600, 300,
+            step=30,
         )
-        requests_per_container = st.slider("Max Requests per Container", 25, 300, 100)
-        initial_replicas = st.slider("Initial Containers", 1, 10, 3)
+
+        seed = st.number_input(
+            "Random seed",
+            value=11,
+            step=1,
+        )
+
+        burst_probability_pct = st.slider(
+            "Burst probability",
+            0.0, 5.0, 1.5,
+            step=0.5,
+            format="%.1f%%",
+            help="Probability of a workload burst occurring on each simulation tick.",
+        )
+
+        model_name = st.radio(
+            "Prediction model",
+            ["xgboost", "linear_regression"],
+        )
+
+        warmup_ticks = st.slider(
+            "Warmup ticks before first training",
+            20, 120, 60,
+            step=10,
+            help="Number of ticks collected before the prediction model is trained.",
+        )
+
+        load_clicked = st.button(
+            "Train / Retrain Model",
+            type="primary",
+            width="stretch",
+            icon=":material/model_training:",
+        )
+
+        if "core_df" in st.session_state:
+            st.caption(
+                "✓ Model trained and simulation ready"
+            )
+        else:
+            st.caption(
+                "Run the model to generate the simulation."
+            )
+
+        st.divider()
+
+        st.subheader("SLA & Capacity")
+
+        target_latency_ms = st.slider(
+            "Target latency",
+            50, 500, 150,
+            step=10,
+            format="%d ms",
+        )
+
+        cpu_threshold_pct = st.slider(
+            "Max CPU utilization",
+            50, 100, 80,
+            help=(
+                "Diagnostic only — flags SLA violations, "
+                "but does not directly change the replica count. "
+                "Target latency is the real scaling driver."
+            ),
+        )
+
+        requests_per_container = st.slider(
+            "Max requests per container",
+            25, 300, 100,
+            step=25,
+            help="Maximum request capacity assigned to one container.",
+        )
+
+        initial_replicas = st.slider(
+            "Initial containers",
+            1, 10, 3,
+        )
 
     return {
-        "duration_minutes": duration_minutes, "seed": int(seed), "burst_probability": burst_probability,
-        "model_name": model_name, "warmup_ticks": warmup_ticks, "load_clicked": load_clicked,
-        "target_latency_ms": target_latency_ms, "cpu_threshold_pct": cpu_threshold_pct,
-        "requests_per_container": requests_per_container, "initial_replicas": initial_replicas,
+        "duration_minutes": duration_minutes,
+        "seed": int(seed),
+        "burst_probability": burst_probability_pct / 100,
+        "model_name": model_name,
+        "warmup_ticks": warmup_ticks,
+        "load_clicked": load_clicked,
+        "target_latency_ms": target_latency_ms,
+        "cpu_threshold_pct": cpu_threshold_pct,
+        "requests_per_container": requests_per_container,
+        "initial_replicas": initial_replicas,
     }
-
 
 def build_configs(ctrl):
     hpa_cfg = HPAConfig(min_replicas=1, max_replicas=15)
@@ -230,41 +302,129 @@ def main():
                 st.altair_chart(chart, width="stretch")
     # ---------------- TAB 2: Live Control Panel ----------------
     with tab2:
-        st.write("Splice an override onto the loaded simulation's history at a chosen point in time, "
-                 "and see the instant prediction + scaling decision. Does not affect the real run above.")
-        max_tick = len(core_df) - 1
-        t_col, r_col, c_col, n_col = st.columns(4)
-        timestamp_idx = t_col.slider("Timestamp (tick)", 1, max_tick, min(200, max_tick))
-        override_rr = r_col.slider("Current Requests/sec", 0, 800, 150)
-        override_cpu = c_col.slider("Current CPU Usage (%)", 0, 100, 50)
-        override_replicas = n_col.slider("Current Running Containers", 1, 15, 3)
+        st.header("Live Control Panel", icon=":material/tune:")
 
-        history_slice = core_df.iloc[: timestamp_idx + 1]
-        preview = preview_decision(
-            history_slice, override_rr, override_cpu, override_replicas,
-            svc, hpa_cfg, sla_cfg, capacity_cfg,
+        st.caption(
+          "Test a point-in-time workload override and see how the predictive "
+          "autoscaler responds. Changes here do not modify the loaded simulation."
         )
 
-        if preview.out_of_range_warning:
-            st.warning(preview.out_of_range_warning)
+    # ---------------------------------------------------------
+    # Override controls
+    # ---------------------------------------------------------
+    with st.container(border=True):
+        st.subheader("Simulation override")
 
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric("Predicted next-step load", f"{preview.predicted_request_rate:.0f}", f"{preview.predicted_delta:+.0f}")
-        p2.metric("Required containers", preview.fused_decision.target_replicas, f"{preview.replica_delta:+d}")
-        p3.metric("Current capacity", f"{override_replicas * ctrl['requests_per_container']:.0f} req/s")
-        if preview.replica_delta > 0:
-            action_label = "SCALE UP"
-        elif preview.replica_delta < 0:
-            action_label = "SCALE DOWN"
-        else:
-            action_label = "NO CHANGE"
-        p4.metric("Scaling action", action_label)
+        max_tick = len(core_df) - 1
 
-        st.write("**Decision breakdown:**", preview.fused_decision.rationale)
-        if preview.sla_violation.violated:
-            st.error("SLA violated: " + "; ".join(preview.sla_violation.reasons))
-        else:
-            st.success("SLA satisfied at this point")
+        t_col, r_col, c_col, n_col = st.columns(4, gap="medium")
+
+        timestamp_idx = t_col.slider(
+            "Timestamp (tick)",
+            1,
+            max_tick,
+            min(200, max_tick),
+        )
+
+        override_rr = r_col.slider(
+            "Current Requests/sec",
+            0,
+            800,
+            150,
+        )
+
+        override_cpu = c_col.slider(
+            "Current CPU Usage (%)",
+            0,
+            100,
+            50,
+        )
+
+        override_replicas = n_col.slider(
+            "Current Running Containers",
+            1,
+            15,
+            3,
+        )
+
+    history_slice = core_df.iloc[: timestamp_idx + 1]
+
+    preview = preview_decision(
+        history_slice,
+        override_rr,
+        override_cpu,
+        override_replicas,
+        svc,
+        hpa_cfg,
+        sla_cfg,
+        capacity_cfg,
+    )
+
+    if preview.out_of_range_warning:
+        st.warning(preview.out_of_range_warning)
+
+    # ---------------------------------------------------------
+    # Decision output
+    # ---------------------------------------------------------
+    st.subheader("Autoscaling decision", icon=":material/auto_graph:")
+
+    p1, p2, p3, p4 = st.columns(4, gap="medium")
+
+    p1.metric(
+        "Predicted next-step load",
+        f"{preview.predicted_request_rate:.0f} req/s",
+        f"{preview.predicted_delta:+.0f} req/s",
+        border=True,
+    )
+
+    p2.metric(
+        "Required containers",
+        preview.fused_decision.target_replicas,
+        f"{preview.replica_delta:+d}",
+        border=True,
+    )
+
+    p3.metric(
+        "Current capacity",
+        f"{override_replicas * ctrl['requests_per_container']:.0f} req/s",
+        border=True,
+    )
+
+    if preview.replica_delta > 0:
+        action_label = "SCALE UP"
+        action_icon = ":material/trending_up:"
+    elif preview.replica_delta < 0:
+        action_label = "SCALE DOWN"
+        action_icon = ":material/trending_down:"
+    else:
+        action_label = "NO CHANGE"
+        action_icon = ":material/remove:"
+
+    p4.metric(
+        "Scaling action",
+        action_label,
+        border=True,
+        icon=action_icon,
+    )
+
+    # ---------------------------------------------------------
+    # Reasoning
+    # ---------------------------------------------------------
+    st.write(
+        "**Decision breakdown:** ",
+        preview.fused_decision.rationale,
+    )
+
+    if preview.sla_violation.violated:
+        st.error(
+            "SLA violated: " + "; ".join(preview.sla_violation.reasons),
+            icon=":material/error:",
+        )
+    else:
+        st.success(
+            "SLA satisfied at this point",
+            icon=":material/check_circle:",
+        )
 
         chart_df = pd.DataFrame({
             "metric": ["Current Capacity", "Predicted Demand", "New Capacity"],
