@@ -9,7 +9,8 @@ SLA/capacity/initial-replica sliders only trigger replay -- that's what
 makes "every slider instantly updates all tabs" literally true instead of
 re-running the whole simulation on each tweak.
 """
-
+import preview
+from dataclasses import fields
 from dataclasses import asdict
 
 import pandas as pd
