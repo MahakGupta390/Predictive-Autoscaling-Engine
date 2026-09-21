@@ -461,9 +461,20 @@ def main():
             st.success("SLA satisfied at this step")
 
         st.subheader("History up to this step")
+
         history_so_far = results_df.iloc[: step_idx + 1].set_index("tick")
-        st.line_chart(history_so_far[["request_rate", "predicted_request_rate"]])
-        st.line_chart(history_so_far[["final_replicas"]])
+
+        st.markdown("**Request Load Over Time**")
+        st.caption("X-axis: Time step (15 seconds per step) · Y-axis: Requests per second")
+        st.line_chart(
+            history_so_far[["request_rate", "predicted_request_rate"]]
+        )
+
+        st.markdown("**Container Allocation Over Time**")
+        st.caption("X-axis: Time step (15 seconds per step) · Y-axis: Number of containers")
+        st.line_chart(
+            history_so_far[["final_replicas"]]
+        )
 if __name__ == "__main__":
     main()
 
