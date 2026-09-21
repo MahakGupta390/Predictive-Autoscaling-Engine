@@ -239,7 +239,7 @@ def main():
                 tooltip=["Model", alt.Tooltip("MAPE:Q", format=".2f")]
                 ).properties(height=360)
                 st.altair_chart(chart, width="stretch")
-    # ---------------- TAB 2: Live Control Panel ----------------
+    # # ---------------- TAB 2: Live Control Panel ----------------
     with tab2:
         st.write("Splice an override onto the loaded simulation's history at a chosen point in time, "
                  "and see the instant prediction + scaling decision. Does not affect the real run above.")
@@ -260,6 +260,25 @@ def main():
             st.warning(preview.out_of_range_warning)
 
         with st.container(border=True):
+            st.markdown("### Decision pipeline")
+
+            d1, d2, d3 = st.columns(3, gap="small")
+
+            d1.metric(
+                "Reactive HPA",
+                f"{preview.hpa_decision.desired_replicas} replicas",
+            )
+
+            d2.metric(
+                "Predicted SLA",
+                f"{preview.predicted_sla_replicas} replicas",
+            )
+
+            d3.metric(
+                "Final Target",
+                f"{preview.fused_decision.target_replicas} replicas",
+            )
+            st.markdown("### Current status")
             p1, p2, p3, p4 = st.columns(4,gap="small")
 
             p1.metric(
@@ -352,7 +371,7 @@ def main():
         ).properties(height=360)
 
         st.altair_chart(chart, width="stretch")
-
+   
     # ---------------- TAB 3: What-If Scenarios ----------------
     with tab3:
         st.write("Three independent scenarios, compared side by side. Each uses the same loaded "

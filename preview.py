@@ -23,7 +23,7 @@ from prediction_service import PredictionService, FEATURE_COLUMNS
 from preprocessing import process_batch, PreprocessConfig
 from hpa_calculator import calculate_desired_replicas, HPAConfig, HPADecision
 from capacity_model import CapacityConfig
-from sla_evaluator import SLAConfig, check_sla_violation, SLAViolationReport
+from sla_evaluator import SLAConfig, check_sla_violation, required_replicas_for_sla,SLAViolationReport
 from fusion import combine, FusedDecision
 
 
@@ -32,6 +32,7 @@ class PreviewResult:
     predicted_request_rate: float
     predicted_delta: float              # vs override_request_rate
     hpa_decision: HPADecision
+    predicted_sla_replicas: int
     fused_decision: FusedDecision
     sla_violation: SLAViolationReport
     replica_delta: int                  # fused target vs override_replicas
@@ -82,11 +83,23 @@ def preview_decision(
         )
 
     hpa_decision = calculate_desired_replicas(
-        current_replicas=override_replicas,
-        current_utilization_pct=override_cpu_pct / max(1, override_replicas),
-        cfg=hpa_cfg,
-    )
-    fused_decision = combine(hpa_decision, predicted, sla_cfg, capacity_cfg)
+    current_replicas=override_replicas,
+    current_utilization_pct=override_cpu_pct / max(1, override_replicas),
+    cfg=hpa_cfg,
+)
+
+    predicted_sla_replicas = required_replicas_for_sla(
+        predicted,
+        sla_cfg,
+        capacity_cfg,
+)
+
+    fused_decision = combine(
+        hpa_decision,
+        predicted,
+        sla_cfg,
+        capacity_cfg,
+)
     sla_violation = check_sla_violation(
         current_replicas=override_replicas, current_request_rate=override_request_rate,
         current_cpu_pct=override_cpu_pct, sla_cfg=sla_cfg, capacity_cfg=capacity_cfg,
@@ -96,8 +109,9 @@ def preview_decision(
         predicted_request_rate=predicted,
         predicted_delta=predicted - override_request_rate,
         hpa_decision=hpa_decision,
+        predicted_sla_replicas=predicted_sla_replicas,
         fused_decision=fused_decision,
         sla_violation=sla_violation,
         replica_delta=fused_decision.target_replicas - override_replicas,
         out_of_range_warning=warning,
-    )
+)
