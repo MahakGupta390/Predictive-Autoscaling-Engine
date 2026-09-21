@@ -1,129 +1,51 @@
-Predictive Autoscaler
+# Predictive Autoscaling Engine
 
-A predictive autoscaling engine that combines workload forecasting with reactive HPA-style scaling, capacity limits, SLA-aware scaling, and safety controls. The included Streamlit dashboard runs a complete simulation using synthetic workload metrics, so the dashboard can be explored without a Kubernetes cluster.
+An autoscaler for Kubernetes-style workloads that fuses a **predictive** signal (Ridge regression + XGBoost, trained on rolling-window traffic features) with a **reactive** HPA baseline, so it can scale ahead of a traffic ramp instead of only reacting after latency has already degraded.
 
-Installation
+**Live demo:** https://predictive-autoscaling-engine-8xjxrsehmmuwgbdmxg92q8.streamlit.app/
 
-Clone or download the repository, then install the Python dependencies:
 
+## Why this exists
+
+Standard reactive autoscaling (Kubernetes HPA) can only respond *after* load has already risen — during a fast ramp, that lag means either real latency/error-rate degradation while replicas catch up, or permanently over-provisioned capacity to buffer against that lag. This project fuses a trained forecast into the scaling decision so replicas can be added *ahead of* a ramp completing, while keeping the reactive path as a safety net so a bad prediction never scales the system below what current load already justifies.
+
+Full narrative, the tradeoffs made, and the bugs found along the way: see [`case_study.md`](./case_study.md).
+
+## Running it
+
+```bash
 pip install -r requirements.txt
+python -m streamlit run dashboard.py
+```
 
-Run
+Click **Train / Retrain Model** in the sidebar to load a simulation, then explore the five tabs. No Kubernetes cluster required — everything runs against a synthetic workload generator.
 
-Start the interactive dashboard with:
+To run the non-interactive end-to-end proof instead:
+```bash
+python simulate_end_to_end.py
+```
 
-streamlit run dashboard.py
+## Module map
 
-The dashboard opens in your browser and provides simulation controls, workload forecasts, scaling decisions, SLA checks, what-if scenarios, and an architecture view.
+| File | Provides |
+|---|---|
+| `metrics_source.py` | `MetricSource`, `SyntheticMetricSource`, `ClockBasedDemoSource` |
+| `preprocessing.py` | `Preprocessor`, `process_batch` — rolling/EWMA/lag features, calendar features |
+| `hpa_calculator.py` | `calculate_desired_replicas` — reactive baseline |
+| `capacity_model.py` | `required_replicas_for_capacity` |
+| `prediction_service.py` | `PredictionService` (Ridge + XGBoost), `compare_models` |
+| `sla_evaluator.py` | `required_replicas_for_sla`, `check_sla_violation` |
+| `fusion.py` | `combine` — max-rule blend of reactive + predicted |
+| `safety.py` | `apply_safety` — asymmetric stabilization, rate limiting, clamps |
+| `resource_manager.py` | `ResourceManager` — Kubernetes API read/patch |
+| `accuracy_tracker.py` | `AccuracyTracker` — predicted vs actual, rolling MAPE |
+| `retraining_trigger.py` | `RetrainingTrigger` — scheduled + degradation-based |
+| `reconciler.py` | `Reconciler` — ties every module into one tick loop |
+| `preview.py` | `preview_decision` — stateless what-if, backs the dashboard |
+| `dashboard.py` | Streamlit UI |
 
-Project Structure
+## Status
 
-File
-
-Purpose
-
-dashboard.py
-
-Streamlit application containing the interactive simulation dashboard and replay logic.
-
-metrics_source.py
-
-Defines the metric schema/source interface and generates synthetic workload, CPU, and memory metrics.
-
-preprocessing.py
-
-Cleans metrics, maintains history, and creates rolling/calendar features for prediction.
-
-prediction_service.py
-
-Provides the prediction layer with Ridge-based linear regression and XGBoost models, plus model comparison and persistence helpers.
-
-hpa_calculator.py
-
-Implements the reactive HPA-style replica calculation and scaling action logic.
-
-capacity_model.py
-
-Converts request demand and per-container capacity into a required replica count.
-
-sla_evaluator.py
-
-Converts latency/CPU SLA constraints into replica requirements and reports SLA violations.
-
-fusion.py
-
-Combines the reactive HPA recommendation with the predictive/SLA capacity recommendation.
-
-safety.py
-
-Applies replica limits, rate limiting, and asymmetric scale-up/scale-down stabilization.
-
-preview.py
-
-Provides stateless decision previews used by the dashboard's live-control and what-if views.
-
-reconciler.py
-
-Orchestrates the end-to-end autoscaling loop for a real controller: metrics → prediction/HPA → fusion → safety → resource update → tracking/retraining.
-
-resource_manager.py
-
-Handles Kubernetes deployment replica reads and scale operations.
-
-accuracy_tracker.py
-
-Tracks predictions against later observations and calculates prediction accuracy metrics such as MAPE.
-
-retraining_trigger.py
-
-Determines when model retraining should occur based on scheduled intervals or accuracy degradation.
-
-simulation.py
-
-End-to-end simulation harness for exercising the autoscaling pipeline without Kubernetes.
-
-plot_metrics.py
-
-Standalone plotting utility for generated workload metrics.
-
-plot_predictions.py
-
-Standalone utility for preprocessing data, training predictions, and visualizing prediction results.
-
-.streamlit/config.toml
-
-Streamlit theme and dashboard configuration.
-
-Architecture
-
-The main dashboard flow is:
-
-Synthetic Metrics
-       ↓
-Preprocessing / Feature Engineering
-       ↓
-Prediction Model ─────────┐
-                          │
-Reactive HPA ─────────────┤
-                          ↓
-                  Fusion + SLA
-                          ↓
-                       Safety
-                          ↓
-                 Replica Decision
-
-The dashboard separates the expensive workload-generation/training/prediction stage from the lightweight decision replay stage. This allows SLA, capacity, and initial-replica controls to update the scaling decisions without retraining the prediction model on every slider change.
-
-Kubernetes
-
-The Streamlit dashboard is designed for simulation and does not require a Kubernetes cluster.
-
-resource_manager.py contains the Kubernetes integration used by the controller-side reconciliation path. It reads the deployment's current replica count and can apply scaling decisions through the Kubernetes API when the project is run in a Kubernetes environment.
-
-Notes
-
-Workload data used by the dashboard is synthetic.
-
-The prediction layer supports xgboost and linear_regression modes.
-
-The dashboard's simulation controls can change workload generation, model configuration, SLA/capacity settings, and starting replica count.
+- Core pipeline: built and tested end to end against a synthetic workload
+- Dashboard: deployed, interactive
+- Real-cluster deployment (minikube, live Prometheus source): not done — see `case_study.md` for what that would take
