@@ -190,9 +190,40 @@ def main():
     )
 
         st.subheader("Scaling decision log")
+        # st.dataframe(
+        #     results_df[["tick", "timestamp", "final_action", "final_replicas", "fused_rationale", "sla_reasons"]],
+        #     width='stretch', height=300,
+        # )
+        log_df = results_df[
+            [
+                "tick",
+                "timestamp",
+                "final_action",
+                "final_replicas",
+                "fused_rationale",
+                "sla_reasons",
+            ]
+        ].copy()
+
+
+        def color_action(val):
+            if val == "SCALE UP":
+                return "background-color: #ffcccc; color: #8b0000; font-weight: bold;"
+            elif val == "SCALE DOWN":
+                return "background-color: #fff3cd; color: #856404; font-weight: bold;"
+            elif val == "MAINTAIN":
+                return "background-color: #d4edda; color: #155724; font-weight: bold;"
+            return ""
+
+
+        log_df["final_action"] = log_df["final_action"].str.replace(
+            "_", " ", regex=False
+        ).str.upper()
+
         st.dataframe(
-            results_df[["tick", "timestamp", "final_action", "final_replicas", "fused_rationale", "sla_reasons"]],
-            width='stretch', height=300,
+            log_df.style.map(color_action, subset=["final_action"]),
+            width="stretch",
+            height=300,
         )
 
         if offline:
@@ -248,38 +279,45 @@ def main():
                 f"{override_replicas * ctrl['requests_per_container']:.0f} req/s",
             )
 
-            if preview.replica_delta > 0:
-                action_label = "SCALE UP"
-            elif preview.replica_delta < 0:
-                action_label = "SCALE DOWN"
-            else:
-                action_label = "NO CHANGE"
+        if preview.replica_delta > 0:
+            action_label = "SCALE UP"
+            action_color = "#ff4b4b"
+        elif preview.replica_delta < 0:
+            action_label = "SCALE DOWN"
+            action_color = "#f0ad4e"
+        else:
+            action_label = "NO CHANGE"
+            action_color = "#21c354"
 
-            p4.markdown(
-                f"""
-                <div style="margin-top: 0.25rem;">
-                    <div style="font-size: 1rem; color: #d6d6d6;">
-                        Scaling action
-                    </div>
-                    <div style="font-size: 1.6rem; font-weight: 400; margin-top: 0.35rem;">
-                        {action_label}
-                    </div>
+        p4.markdown(
+            f"""
+            <div style="margin-top: 0.25rem;">
+                <div style="font-size: 1rem; color: #d6d6d6;">
+                    Scaling action
                 </div>
-                """,
-                unsafe_allow_html=True,
-)
-
-            st.write(
+                <div style="
+                    font-size: 1.6rem;
+                    font-weight: 600;
+                    margin-top: 0.35rem;
+                    color: {action_color};
+                ">
+                    {action_label}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+        st.write(
                 "**Decision breakdown:**",
                 preview.fused_decision.rationale,
             )
 
-            if preview.sla_violation.violated:
-                st.error(
-                    "SLA violated: " + "; ".join(preview.sla_violation.reasons)
-                )
-            else:
-                st.success("SLA satisfied at this point")
+        if preview.sla_violation.violated:
+             st.error(
+                "SLA violated: " + "; ".join(preview.sla_violation.reasons)
+            )
+        else:
+            st.success("SLA satisfied at this point")
 
         chart_df = pd.DataFrame({
             "metric": ["Current Capacity", "Predicted Demand", "New Capacity"],
@@ -408,3 +446,5 @@ def main():
         st.line_chart(history_so_far[["final_replicas"]])
 if __name__ == "__main__":
     main()
+
+
